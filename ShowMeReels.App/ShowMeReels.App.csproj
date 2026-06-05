@@ -1,0 +1,21 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ApplicationIcon>..\Icon.ico</ApplicationIcon>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3800.47" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="..\Icon.png">
+      <Link>Assets\Icon.png</Link>
+    </Resource>
+  </ItemGroup>
+
+</Project>
