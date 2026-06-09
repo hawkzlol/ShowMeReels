@@ -37,16 +37,15 @@ public sealed class WebViewScriptControllerTests
         Assert.Contains("function getTikTokIgnoreKeys(video)", script);
         Assert.Contains("function getTikTokFingerprintKey(video)", script);
         Assert.Contains("function collectInstagramCandidates(element, candidates)", script);
-        Assert.Contains("function getInstagramFingerprintKey(video)", script);
         Assert.Contains("data-media-id", script);
-        Assert.Contains("ig-fp:${hashString(fingerprintSource)}", script);
+        Assert.Contains("return `ig:${candidateText}`;", script);
+        Assert.DoesNotContain("ig-fp:", script);
         Assert.Contains("function ignoreCurrentTikTokVideo()", script);
         Assert.Contains("function isTikTokInteractionOverlayOpen()", script);
         Assert.Contains("function maybeSkipIgnoredTikTokVideo(video)", script);
         Assert.Contains("window.chrome?.webview?.postMessage", script);
         Assert.Contains("skipSeenReelsEnabled", script);
         Assert.Contains("Skipped seen video", script);
-        Assert.Contains("getActiveReelId(video) ?? getInstagramFingerprintKey(video)", script);
         Assert.Contains("lastDuplicateSkipDirection === skipDirection", script);
         Assert.Contains("scrollByDirection(skipDirection)", script);
         Assert.Contains("Skipped ignored video", script);

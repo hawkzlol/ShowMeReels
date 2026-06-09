@@ -377,8 +377,16 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         return null;
                     }
 
+                    const candidateText = String(candidate).trim();
+                    if (getPlatform() !== "tiktok"
+                        && /^[A-Za-z0-9_-]{6,}$/.test(candidateText)
+                        && !candidateText.includes("/")
+                        && !candidateText.includes(".")) {
+                        return `ig:${candidateText}`;
+                    }
+
                     try {
-                        const normalized = new URL(candidate, window.location.origin);
+                        const normalized = new URL(candidateText, window.location.origin);
                         const platform = getPlatform();
                         if (platform === "tiktok" || normalized.hostname.includes("tiktok.com")) {
                             const videoMatch = normalized.pathname.match(/\/video\/([^/?#]+)/i);
@@ -593,30 +601,6 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         .join("|");
 
                     return fingerprintSource ? `fp:${hashString(fingerprintSource)}` : null;
-                }
-
-                function getInstagramFingerprintKey(video) {
-                    if (getPlatform() === "tiktok" || !video) {
-                        return null;
-                    }
-
-                    const target = getScrollTarget(video) ?? video;
-                    const profileHref = target.querySelector("a[href^='/'][href*='/']")?.getAttribute("href")
-                        ?? target.closest("article, section")?.querySelector("a[href^='/'][href*='/']")?.getAttribute("href")
-                        ?? "";
-                    const description = target.querySelector("h1, h2, span[dir='auto']")?.textContent
-                        ?? target.closest("article, section")?.querySelector("h1, h2, span[dir='auto']")?.textContent
-                        ?? getNormalizedTextSnapshot(target).slice(0, 240);
-                    const assetCandidate = normalizeAssetCandidate(video.poster)
-                        ?? normalizeAssetCandidate(video.currentSrc)
-                        ?? normalizeAssetCandidate(video.getAttribute("src"))
-                        ?? normalizeAssetCandidate(target.querySelector("source")?.getAttribute("src"))
-                        ?? normalizeAssetCandidate(target.querySelector("img[src]")?.getAttribute("src"));
-                    const fingerprintSource = [profileHref.trim().toLowerCase(), String(description || "").trim().toLowerCase(), assetCandidate ?? ""]
-                        .filter(value => value.length > 0)
-                        .join("|");
-
-                    return fingerprintSource ? `ig-fp:${hashString(fingerprintSource)}` : null;
                 }
 
                 function getTikTokIgnoreKeys(video) {
@@ -1050,7 +1034,7 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         return;
                     }
 
-                    const reelId = getActiveReelId(video) ?? getInstagramFingerprintKey(video);
+                    const reelId = getActiveReelId(video);
                     if (!reelId) {
                         return;
                     }
@@ -1080,7 +1064,7 @@ public sealed class WebViewScriptController : IWebViewScriptController
 
                     window.setTimeout(() => {
                         const activeVideo = getActiveVideo();
-                        const activeReelId = getActiveReelId(activeVideo) ?? getInstagramFingerprintKey(activeVideo);
+                        const activeReelId = getActiveReelId(activeVideo);
                         if (!activeVideo || activeReelId !== reelId) {
                             return;
                         }
