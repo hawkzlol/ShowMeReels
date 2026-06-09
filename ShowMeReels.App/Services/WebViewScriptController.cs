@@ -110,6 +110,12 @@ public sealed class WebViewScriptController : IWebViewScriptController
                     });
                 }
 
+                function schedulePostScrollApply() {
+                    scheduleApply(true);
+                    window.setTimeout(() => scheduleApply(true), 60);
+                    window.setTimeout(() => scheduleApply(true), 160);
+                }
+
                 function detectPlatform() {
                     return window.location.hostname.includes("tiktok.com") ? "tiktok" : "instagram";
                 }
@@ -1111,12 +1117,12 @@ public sealed class WebViewScriptController : IWebViewScriptController
 
                 function maybeSkipSeenReel(video) {
                     if (getPlatform() === "tiktok") {
-                        return;
+                        return false;
                     }
 
                     const reelId = getActiveReelId(video);
                     if (!reelId) {
-                        return;
+                        return false;
                     }
 
                     const seenBefore = seenReelIds.has(reelId);
@@ -1126,19 +1132,19 @@ public sealed class WebViewScriptController : IWebViewScriptController
                     }
 
                     if (!state.skipSeenReelsEnabled || !seenBefore) {
-                        return;
+                        return false;
                     }
 
                     const now = Date.now();
                     const skipDirection = lastRequestedScrollDirection < 0 ? -1 : 1;
                     if (skipDirection < 0) {
-                        return;
+                        return false;
                     }
 
                     if (reelId === lastDuplicateSkipId
                         && lastDuplicateSkipDirection === skipDirection
                         && (now - lastDuplicateSkipAt) < DuplicateSkipCooldownMs) {
-                        return;
+                        return true;
                     }
 
                     lastDuplicateSkipId = reelId;
@@ -1155,6 +1161,8 @@ public sealed class WebViewScriptController : IWebViewScriptController
 
                         scrollByDirection(skipDirection);
                     }, 0);
+
+                    return true;
                 }
 
                 function maybeSkipIgnoredTikTokVideo(video) {
@@ -1456,12 +1464,15 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         return false;
                     }
 
+                    if (maybeSkipSeenReel(activeVideo)) {
+                        return false;
+                    }
+
                     if (maybeSkipIgnoredTikTokVideo(activeVideo)) {
                         return false;
                     }
 
                     const isPlaying = applySettingsToVideo(activeVideo);
-                    maybeSkipSeenReel(activeVideo);
                     return isPlaying;
                 }
 
@@ -1572,7 +1583,7 @@ public sealed class WebViewScriptController : IWebViewScriptController
                                 });
                             }
 
-                            scheduleApply(true);
+                            schedulePostScrollApply();
                             return true;
                         }
                     }
@@ -1597,7 +1608,7 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         });
                     }
 
-                    scheduleApply(true);
+                    schedulePostScrollApply();
                     return true;
                 }
 
@@ -1618,7 +1629,7 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         const deltaY = direction * Math.max(activeRect.height || 0, window.innerHeight * 0.92, 420);
                         const moved = tryScrollBestContainer([activeTarget, activeVideo], deltaY);
                         if (moved) {
-                            scheduleApply(true);
+                            schedulePostScrollApply();
                         }
 
                         return moved;
@@ -1660,7 +1671,7 @@ public sealed class WebViewScriptController : IWebViewScriptController
                             scrollContainer.scrollTop = targetTop;
                         }
 
-                        scheduleApply(true);
+                        schedulePostScrollApply();
                         return true;
                     }
 
@@ -1689,7 +1700,7 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         });
                     }
 
-                    scheduleApply(true);
+                    schedulePostScrollApply();
                     return true;
                 }
 

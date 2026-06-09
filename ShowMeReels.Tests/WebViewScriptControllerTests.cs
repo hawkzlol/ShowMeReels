@@ -39,6 +39,9 @@ public sealed class WebViewScriptControllerTests
         Assert.Contains("function collectInstagramCandidates(element, candidates)", script);
         Assert.Contains("function getCurrentPageReelId()", script);
         Assert.Contains("function getVisibleInstagramReelIds(video)", script);
+        Assert.Contains("function schedulePostScrollApply()", script);
+        Assert.Contains("window.setTimeout(() => scheduleApply(true), 60)", script);
+        Assert.Contains("window.setTimeout(() => scheduleApply(true), 160)", script);
         Assert.Contains("data-media-id", script);
         Assert.Contains("return `ig:${candidateText}`;", script);
         Assert.DoesNotContain("ig-fp:", script);
@@ -48,6 +51,7 @@ public sealed class WebViewScriptControllerTests
         Assert.Contains("window.chrome?.webview?.postMessage", script);
         Assert.Contains("skipSeenReelsEnabled", script);
         Assert.Contains("Skipped seen video", script);
+        Assert.Contains("if (maybeSkipSeenReel(activeVideo))", script);
         Assert.Contains("lastDuplicateSkipDirection === skipDirection", script);
         Assert.Contains("if (skipDirection < 0)", script);
         Assert.Contains("scrollByDirection(skipDirection)", script);
