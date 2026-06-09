@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text.Json;
@@ -922,6 +923,12 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (message is not null && string.Equals(message.Type, "seenReelDiagnostic", StringComparison.Ordinal))
+        {
+            AppDiagnostics.Log(FormatSeenReelDiagnostic(message));
+            return;
+        }
+
         if (!string.Equals(message?.Type, "ignoreTikTokVideo", StringComparison.Ordinal))
         {
             return;
@@ -962,6 +969,38 @@ public partial class MainWindow : Window
         AppDiagnostics.Log($"Persisting {newIgnoreKeys.Count} ignored TikTok key(s).");
         await _settingsStore.SaveAsync(_settings);
         await ApplyCurrentSettingsAsync();
+    }
+
+    private static string FormatSeenReelDiagnostic(WebViewMessage message)
+    {
+        return "SeenReel "
+            + $"event={message.Event ?? "unknown"} "
+            + $"reason={message.Reason ?? "none"} "
+            + $"reel={message.ReelId ?? "none"} "
+            + $"last={message.LastActiveReelId ?? "none"} "
+            + $"kind={message.IdentityKind ?? "none"} "
+            + $"enabled={FormatNullable(message.SkipSeenEnabled)} "
+            + $"seenBefore={FormatNullable(message.SeenBefore)} "
+            + $"changed={FormatNullable(message.ActiveReelChanged)} "
+            + $"overlay={FormatNullable(message.OverlayOpen)} "
+            + $"suppressed={FormatNullable(message.InteractionSuppressed)} "
+            + $"direction={message.SkipDirection?.ToString() ?? "none"} "
+            + $"seenCount={message.SeenCount?.ToString() ?? "none"} "
+            + $"visibleVideos={message.VisibleVideoCount?.ToString() ?? "none"} "
+            + $"candidateCount={message.CandidateCount?.ToString() ?? "none"} "
+            + $"top={FormatNullable(message.VideoTop)} "
+            + $"height={FormatNullable(message.VideoHeight)} "
+            + $"path={message.Path ?? "none"}";
+    }
+
+    private static string FormatNullable(bool? value)
+    {
+        return value.HasValue ? value.Value.ToString() : "none";
+    }
+
+    private static string FormatNullable(double? value)
+    {
+        return value.HasValue ? value.Value.ToString("0.##", CultureInfo.InvariantCulture) : "none";
     }
 
     private async Task RestorePlaybackAsync(bool shouldResume)
@@ -1544,5 +1583,25 @@ public partial class MainWindow : Window
         public uint StateMask;
     }
 
-    private sealed record WebViewMessage(string? Type, string? VideoId, string[]? VideoIds);
+    private sealed record WebViewMessage(
+        string? Type,
+        string? VideoId,
+        string[]? VideoIds,
+        string? Event,
+        string? Reason,
+        string? ReelId,
+        string? LastActiveReelId,
+        string? IdentityKind,
+        string? Path,
+        bool? SkipSeenEnabled,
+        bool? SeenBefore,
+        bool? ActiveReelChanged,
+        bool? OverlayOpen,
+        bool? InteractionSuppressed,
+        int? SkipDirection,
+        int? SeenCount,
+        int? VisibleVideoCount,
+        int? CandidateCount,
+        double? VideoTop,
+        double? VideoHeight);
 }

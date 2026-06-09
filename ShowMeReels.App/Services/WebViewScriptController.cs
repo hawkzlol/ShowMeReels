@@ -67,6 +67,8 @@ public sealed class WebViewScriptController : IWebViewScriptController
                 const AdSkipCooldownMs = 1200;
                 const DuplicateSkipCooldownMs = 700;
                 const SeenSkipInteractionSuppressionMs = 8000;
+                const SeenReelDiagnosticThrottleMs = 750;
+                const SeenReelNoIdentityDiagnosticThrottleMs = 2500;
                 const IgnoredTikTokSkipCooldownMs = 700;
                 const ActiveAudioEnforcementIntervalMs = 250;
                 const ActiveMaintenanceIntervalMs = 1200;
@@ -92,6 +94,8 @@ public sealed class WebViewScriptController : IWebViewScriptController
                 let lastDuplicateSkipAt = 0;
                 let seenSkipSuppressedVideo = null;
                 let seenSkipSuppressedUntil = 0;
+                let lastSeenReelDiagnosticSignature = "";
+                let lastSeenReelDiagnosticAt = 0;
                 let lastIgnoredTikTokVideoId = null;
                 let lastIgnoredTikTokSkipAt = 0;
                 let lastRequestedScrollDirection = 1;
@@ -1198,6 +1202,106 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         Array.from(document.querySelectorAll(selector)).some(candidate => isVisibleOverlay(candidate)));
                 }
 
+                function getReelIdentityKind(reelId) {
+                    if (!reelId) {
+                        return "none";
+                    }
+
+                    if (String(reelId).startsWith("ig-fp:")) {
+                        return "instagram-fingerprint";
+                    }
+
+                    if (String(reelId).startsWith("ig:")) {
+                        return "instagram-shortcode-raw";
+                    }
+
+                    return getPlatform() === "instagram" ? "instagram-shortcode" : "platform-id";
+                }
+
+                function getInstagramDiagnosticCandidateCount(video) {
+                    if (getPlatform() !== "instagram" || !video) {
+                        return 0;
+                    }
+
+                    const candidateIds = new Set(getVisibleInstagramReelIds(video));
+                    const elements = [getScrollTarget(video), video.parentElement, video]
+                        .filter(element => element instanceof Element);
+                    const candidates = [];
+
+                    for (const element of elements) {
+                        collectInstagramCandidates(element, candidates);
+                    }
+
+                    for (const candidate of candidates) {
+                        const reelId = extractReelId(candidate);
+                        if (reelId) {
+                            candidateIds.add(reelId);
+                        }
+                    }
+
+                    return candidateIds.size;
+                }
+
+                function postSeenReelDiagnostic(eventName, details = {}, throttleMs = SeenReelDiagnosticThrottleMs) {
+                    if (getPlatform() !== "instagram") {
+                        return;
+                    }
+
+                    const now = Date.now();
+                    const reelId = details.reelId ?? null;
+                    const activeReelChanged = details.activeReelChanged ?? null;
+                    const seenBefore = details.seenBefore ?? null;
+                    const reason = details.reason ?? "";
+                    const signature = [
+                        eventName,
+                        reason,
+                        reelId ?? "",
+                        lastActiveReelId ?? "",
+                        String(activeReelChanged),
+                        String(seenBefore)
+                    ].join("|");
+
+                    if (signature === lastSeenReelDiagnosticSignature && (now - lastSeenReelDiagnosticAt) < throttleMs) {
+                        return;
+                    }
+
+                    lastSeenReelDiagnosticSignature = signature;
+                    lastSeenReelDiagnosticAt = now;
+
+                    const video = details.video ?? getActiveVideo();
+                    const rect = video ? video.getBoundingClientRect() : null;
+                    const payload = {
+                        type: "seenReelDiagnostic",
+                        event: eventName,
+                        reason,
+                        reelId,
+                        lastActiveReelId,
+                        identityKind: getReelIdentityKind(reelId),
+                        skipSeenEnabled: state.skipSeenReelsEnabled,
+                        seenBefore,
+                        activeReelChanged,
+                        overlayOpen: details.overlayOpen ?? isInstagramInteractionOverlayOpen(),
+                        interactionSuppressed: details.interactionSuppressed ?? isSeenSkipSuppressedForVideo(video),
+                        skipDirection: details.skipDirection ?? (lastRequestedScrollDirection < 0 ? -1 : 1),
+                        seenCount: seenReelIds.size,
+                        visibleVideoCount: getVisibleVideos().length,
+                        candidateCount: details.candidateCount ?? (video ? getInstagramDiagnosticCandidateCount(video) : 0),
+                        videoTop: rect ? Math.round(rect.top * 100) / 100 : null,
+                        videoHeight: rect ? Math.round(rect.height * 100) / 100 : null,
+                        path: window.location.pathname
+                    };
+
+                    try {
+                        window.chrome?.webview?.postMessage(payload);
+                    } catch {
+                    }
+
+                    try {
+                        console.debug("[ShowMeReels]", payload);
+                    } catch {
+                    }
+                }
+
                 function suppressSeenSkipForCurrentInteraction() {
                     if (getPlatform() !== "instagram") {
                         return;
@@ -1205,6 +1309,12 @@ public sealed class WebViewScriptController : IWebViewScriptController
 
                     seenSkipSuppressedVideo = getActiveVideo();
                     seenSkipSuppressedUntil = Date.now() + SeenSkipInteractionSuppressionMs;
+                    postSeenReelDiagnostic("interaction", {
+                        reason: "pointer-or-click",
+                        video: seenSkipSuppressedVideo,
+                        reelId: getActiveReelId(seenSkipSuppressedVideo),
+                        interactionSuppressed: true
+                    }, 1000);
                 }
 
                 function isSeenSkipSuppressedForVideo(video) {
@@ -1226,12 +1336,25 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         return false;
                     }
 
-                    if (isInstagramInteractionOverlayOpen() || isSeenSkipSuppressedForVideo(video)) {
+                    const overlayOpen = isInstagramInteractionOverlayOpen();
+                    const interactionSuppressed = isSeenSkipSuppressedForVideo(video);
+                    if (overlayOpen || interactionSuppressed) {
+                        postSeenReelDiagnostic("suppressed", {
+                            reason: overlayOpen ? "overlay-open" : "recent-user-interaction",
+                            video,
+                            overlayOpen,
+                            interactionSuppressed
+                        }, 1000);
                         return false;
                     }
 
                     const reelId = getActiveReelId(video);
                     if (!reelId) {
+                        postSeenReelDiagnostic("identity-missing", {
+                            reason: "active-reel-id-not-found",
+                            video,
+                            candidateCount: getInstagramDiagnosticCandidateCount(video)
+                        }, SeenReelNoIdentityDiagnosticThrottleMs);
                         return false;
                     }
 
@@ -1242,35 +1365,104 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         rememberSeenReelId(reelId);
                     }
 
-                    if (!state.skipSeenReelsEnabled || !seenBefore || !activeReelChanged) {
+                    if (!state.skipSeenReelsEnabled) {
+                        postSeenReelDiagnostic("disabled", {
+                            reason: "setting-off",
+                            video,
+                            reelId,
+                            seenBefore,
+                            activeReelChanged
+                        }, 2500);
+                        return false;
+                    }
+
+                    if (!seenBefore) {
+                        postSeenReelDiagnostic("remembered", {
+                            reason: "first-time-seen",
+                            video,
+                            reelId,
+                            seenBefore,
+                            activeReelChanged
+                        });
+                        return false;
+                    }
+
+                    if (!activeReelChanged) {
+                        postSeenReelDiagnostic("not-skipping", {
+                            reason: "same-active-reel",
+                            video,
+                            reelId,
+                            seenBefore,
+                            activeReelChanged
+                        }, 1500);
                         return false;
                     }
 
                     const now = Date.now();
                     const skipDirection = lastRequestedScrollDirection < 0 ? -1 : 1;
                     if (skipDirection < 0) {
+                        postSeenReelDiagnostic("not-skipping", {
+                            reason: "backward-scroll",
+                            video,
+                            reelId,
+                            seenBefore,
+                            activeReelChanged,
+                            skipDirection
+                        });
                         return false;
                     }
 
                     if (reelId === lastDuplicateSkipId
                         && lastDuplicateSkipDirection === skipDirection
                         && (now - lastDuplicateSkipAt) < DuplicateSkipCooldownMs) {
+                        postSeenReelDiagnostic("not-skipping", {
+                            reason: "duplicate-skip-cooldown",
+                            video,
+                            reelId,
+                            seenBefore,
+                            activeReelChanged,
+                            skipDirection
+                        });
                         return true;
                     }
 
                     lastDuplicateSkipId = reelId;
                     lastDuplicateSkipDirection = skipDirection;
                     lastDuplicateSkipAt = now;
+                    postSeenReelDiagnostic("skip", {
+                        reason: "seen-reel-reappeared",
+                        video,
+                        reelId,
+                        seenBefore,
+                        activeReelChanged,
+                        skipDirection
+                    }, 0);
                     showToast("Skipped seen video");
 
                     window.setTimeout(() => {
                         const activeVideo = getActiveVideo();
                         const activeReelId = getActiveReelId(activeVideo);
                         if (!activeVideo || activeReelId !== reelId) {
+                            postSeenReelDiagnostic("skip-cancelled", {
+                                reason: "active-reel-changed-before-scroll",
+                                video: activeVideo,
+                                reelId: activeReelId,
+                                seenBefore,
+                                activeReelChanged,
+                                skipDirection
+                            }, 0);
                             return;
                         }
 
                         scrollByDirection(skipDirection);
+                        postSeenReelDiagnostic("skip-scrolled", {
+                            reason: "scroll-command-issued",
+                            video: activeVideo,
+                            reelId,
+                            seenBefore,
+                            activeReelChanged,
+                            skipDirection
+                        }, 0);
                     }, 0);
 
                     return true;
