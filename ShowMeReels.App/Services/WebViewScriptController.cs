@@ -87,6 +87,7 @@ public sealed class WebViewScriptController : IWebViewScriptController
                 let lastAdSkipDirection = 1;
                 let lastActiveReelId = null;
                 let lastDuplicateSkipId = null;
+                let lastDuplicateSkipDirection = 1;
                 let lastDuplicateSkipAt = 0;
                 let lastIgnoredTikTokVideoId = null;
                 let lastIgnoredTikTokSkipAt = 0;
@@ -440,6 +441,36 @@ public sealed class WebViewScriptController : IWebViewScriptController
                     }
                 }
 
+                function collectInstagramCandidates(element, candidates) {
+                    if (!(element instanceof Element)) {
+                        return;
+                    }
+
+                    const attributeNames = [
+                        "href",
+                        "src",
+                        "poster",
+                        "itemid",
+                        "data-id",
+                        "data-media-id",
+                        "data-reel-id",
+                        "data-video-id"
+                    ];
+
+                    collectAttributeCandidates(element, attributeNames, candidates);
+
+                    const descendants = Array.from(element.querySelectorAll("[href], [src], [poster], [itemid], [data-id], [data-media-id], [data-reel-id], [data-video-id]"));
+                    for (const descendant of descendants.slice(0, 48)) {
+                        collectAttributeCandidates(descendant, attributeNames, candidates);
+                    }
+
+                    const htmlSnapshot = String(element.innerHTML || "");
+                    const textMatches = htmlSnapshot.match(/\/reel\/([^/?#"'<\s]+)/ig) ?? [];
+                    for (const match of textMatches.slice(0, 12)) {
+                        candidates.push(match);
+                    }
+                }
+
                 function getActiveReelId(video) {
                     if (!video) {
                         return null;
@@ -453,6 +484,8 @@ public sealed class WebViewScriptController : IWebViewScriptController
                     for (const element of elements) {
                         if (getPlatform() === "tiktok") {
                             collectTikTokCandidates(element, candidates);
+                        } else {
+                            collectInstagramCandidates(element, candidates);
                         }
 
                         const parentAnchor = element.closest(reelSelector);
@@ -480,16 +513,14 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         }
                     }
 
-                    if (getPlatform() === "tiktok") {
-                        const canonicalHref = document.querySelector("link[rel='canonical']")?.getAttribute("href");
-                        if (canonicalHref) {
-                            candidates.push(canonicalHref);
-                        }
+                    const canonicalHref = document.querySelector("link[rel='canonical']")?.getAttribute("href");
+                    if (canonicalHref) {
+                        candidates.push(canonicalHref);
+                    }
 
-                        const ogUrl = document.querySelector("meta[property='og:url']")?.getAttribute("content");
-                        if (ogUrl) {
-                            candidates.push(ogUrl);
-                        }
+                    const ogUrl = document.querySelector("meta[property='og:url']")?.getAttribute("content");
+                    if (ogUrl) {
+                        candidates.push(ogUrl);
                     }
 
                     if (window.location?.href) {
@@ -562,6 +593,30 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         .join("|");
 
                     return fingerprintSource ? `fp:${hashString(fingerprintSource)}` : null;
+                }
+
+                function getInstagramFingerprintKey(video) {
+                    if (getPlatform() === "tiktok" || !video) {
+                        return null;
+                    }
+
+                    const target = getScrollTarget(video) ?? video;
+                    const profileHref = target.querySelector("a[href^='/'][href*='/']")?.getAttribute("href")
+                        ?? target.closest("article, section")?.querySelector("a[href^='/'][href*='/']")?.getAttribute("href")
+                        ?? "";
+                    const description = target.querySelector("h1, h2, span[dir='auto']")?.textContent
+                        ?? target.closest("article, section")?.querySelector("h1, h2, span[dir='auto']")?.textContent
+                        ?? getNormalizedTextSnapshot(target).slice(0, 240);
+                    const assetCandidate = normalizeAssetCandidate(video.poster)
+                        ?? normalizeAssetCandidate(video.currentSrc)
+                        ?? normalizeAssetCandidate(video.getAttribute("src"))
+                        ?? normalizeAssetCandidate(target.querySelector("source")?.getAttribute("src"))
+                        ?? normalizeAssetCandidate(target.querySelector("img[src]")?.getAttribute("src"));
+                    const fingerprintSource = [profileHref.trim().toLowerCase(), String(description || "").trim().toLowerCase(), assetCandidate ?? ""]
+                        .filter(value => value.length > 0)
+                        .join("|");
+
+                    return fingerprintSource ? `ig-fp:${hashString(fingerprintSource)}` : null;
                 }
 
                 function getTikTokIgnoreKeys(video) {
@@ -995,7 +1050,7 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         return;
                     }
 
-                    const reelId = getActiveReelId(video);
+                    const reelId = getActiveReelId(video) ?? getInstagramFingerprintKey(video);
                     if (!reelId) {
                         return;
                     }
@@ -1011,21 +1066,26 @@ public sealed class WebViewScriptController : IWebViewScriptController
                     }
 
                     const now = Date.now();
-                    if (reelId === lastDuplicateSkipId && (now - lastDuplicateSkipAt) < DuplicateSkipCooldownMs) {
+                    const skipDirection = lastRequestedScrollDirection < 0 ? -1 : 1;
+                    if (reelId === lastDuplicateSkipId
+                        && lastDuplicateSkipDirection === skipDirection
+                        && (now - lastDuplicateSkipAt) < DuplicateSkipCooldownMs) {
                         return;
                     }
 
                     lastDuplicateSkipId = reelId;
+                    lastDuplicateSkipDirection = skipDirection;
                     lastDuplicateSkipAt = now;
                     showToast(`Skipped seen video ${reelId}`);
 
                     window.setTimeout(() => {
                         const activeVideo = getActiveVideo();
-                        if (!activeVideo || getActiveReelId(activeVideo) !== reelId) {
+                        const activeReelId = getActiveReelId(activeVideo) ?? getInstagramFingerprintKey(activeVideo);
+                        if (!activeVideo || activeReelId !== reelId) {
                             return;
                         }
 
-                        scrollByDirection(1);
+                        scrollByDirection(skipDirection);
                     }, 0);
                 }
 
