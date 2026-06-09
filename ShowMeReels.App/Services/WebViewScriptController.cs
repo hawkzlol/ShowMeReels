@@ -479,6 +479,77 @@ public sealed class WebViewScriptController : IWebViewScriptController
                     }
                 }
 
+                function getCurrentPageReelId() {
+                    const pageCandidates = [
+                        window.location?.href,
+                        document.querySelector("link[rel='canonical']")?.getAttribute("href"),
+                        document.querySelector("meta[property='og:url']")?.getAttribute("content")
+                    ];
+
+                    for (const candidate of pageCandidates) {
+                        const reelId = extractReelId(candidate);
+                        if (reelId) {
+                            return reelId;
+                        }
+                    }
+
+                    return null;
+                }
+
+                function getElementRectForScoring(element) {
+                    if (!(element instanceof Element)) {
+                        return null;
+                    }
+
+                    const ownRect = element.getBoundingClientRect();
+                    if (ownRect.width > 0 && ownRect.height > 0) {
+                        return ownRect;
+                    }
+
+                    const container = element.closest("article, section, main > div");
+                    if (container instanceof Element) {
+                        const containerRect = container.getBoundingClientRect();
+                        if (containerRect.width > 0 && containerRect.height > 0) {
+                            return containerRect;
+                        }
+                    }
+
+                    return null;
+                }
+
+                function getVisibleInstagramReelIds(video) {
+                    if (getPlatform() === "tiktok" || !video) {
+                        return [];
+                    }
+
+                    const videoRect = video.getBoundingClientRect();
+                    const scored = [];
+                    const seenIds = new Set();
+                    for (const anchor of Array.from(document.querySelectorAll("a[href*='/reel/']"))) {
+                        const reelId = extractReelId(anchor.getAttribute("href") || anchor.href);
+                        if (!reelId || seenIds.has(reelId)) {
+                            continue;
+                        }
+
+                        const rect = getElementRectForScoring(anchor);
+                        if (!rect || rect.bottom <= 0 || rect.top >= window.innerHeight) {
+                            continue;
+                        }
+
+                        const verticalOverlap = Math.max(0, Math.min(rect.bottom, videoRect.bottom) - Math.max(rect.top, videoRect.top));
+                        const horizontalOverlap = Math.max(0, Math.min(rect.right, videoRect.right) - Math.max(rect.left, videoRect.left));
+                        const overlapArea = verticalOverlap * horizontalOverlap;
+                        const centerDistance = Math.abs((videoRect.top + (videoRect.height / 2)) - (rect.top + (rect.height / 2)));
+                        const score = overlapArea - centerDistance;
+                        seenIds.add(reelId);
+                        scored.push({ reelId, score });
+                    }
+
+                    return scored
+                        .sort((left, right) => right.score - left.score)
+                        .map(candidate => candidate.reelId);
+                }
+
                 function getActiveReelId(video) {
                     if (!video) {
                         return null;
@@ -521,14 +592,23 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         }
                     }
 
-                    const canonicalHref = document.querySelector("link[rel='canonical']")?.getAttribute("href");
-                    if (canonicalHref) {
-                        candidates.push(canonicalHref);
-                    }
+                    if (getPlatform() !== "tiktok") {
+                        const pageReelId = getCurrentPageReelId();
+                        if (pageReelId) {
+                            return pageReelId;
+                        }
 
-                    const ogUrl = document.querySelector("meta[property='og:url']")?.getAttribute("content");
-                    if (ogUrl) {
-                        candidates.push(ogUrl);
+                        candidates.unshift(...getVisibleInstagramReelIds(video));
+                    } else {
+                        const canonicalHref = document.querySelector("link[rel='canonical']")?.getAttribute("href");
+                        if (canonicalHref) {
+                            candidates.push(canonicalHref);
+                        }
+
+                        const ogUrl = document.querySelector("meta[property='og:url']")?.getAttribute("content");
+                        if (ogUrl) {
+                            candidates.push(ogUrl);
+                        }
                     }
 
                     if (window.location?.href) {
@@ -1051,6 +1131,10 @@ public sealed class WebViewScriptController : IWebViewScriptController
 
                     const now = Date.now();
                     const skipDirection = lastRequestedScrollDirection < 0 ? -1 : 1;
+                    if (skipDirection < 0) {
+                        return;
+                    }
+
                     if (reelId === lastDuplicateSkipId
                         && lastDuplicateSkipDirection === skipDirection
                         && (now - lastDuplicateSkipAt) < DuplicateSkipCooldownMs) {

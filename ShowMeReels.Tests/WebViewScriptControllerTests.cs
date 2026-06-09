@@ -37,6 +37,8 @@ public sealed class WebViewScriptControllerTests
         Assert.Contains("function getTikTokIgnoreKeys(video)", script);
         Assert.Contains("function getTikTokFingerprintKey(video)", script);
         Assert.Contains("function collectInstagramCandidates(element, candidates)", script);
+        Assert.Contains("function getCurrentPageReelId()", script);
+        Assert.Contains("function getVisibleInstagramReelIds(video)", script);
         Assert.Contains("data-media-id", script);
         Assert.Contains("return `ig:${candidateText}`;", script);
         Assert.DoesNotContain("ig-fp:", script);
@@ -47,6 +49,7 @@ public sealed class WebViewScriptControllerTests
         Assert.Contains("skipSeenReelsEnabled", script);
         Assert.Contains("Skipped seen video", script);
         Assert.Contains("lastDuplicateSkipDirection === skipDirection", script);
+        Assert.Contains("if (skipDirection < 0)", script);
         Assert.Contains("scrollByDirection(skipDirection)", script);
         Assert.Contains("Skipped ignored video", script);
         Assert.Contains("Ignoring this video", script);
