@@ -37,8 +37,12 @@ public sealed class WebViewScriptControllerTests
         Assert.Contains("function getTikTokIgnoreKeys(video)", script);
         Assert.Contains("function getTikTokFingerprintKey(video)", script);
         Assert.Contains("function collectInstagramCandidates(element, candidates)", script);
-        Assert.Contains("function getCurrentPageReelId()", script);
+        Assert.DoesNotContain("function getCurrentPageReelId()", script);
         Assert.Contains("function getVisibleInstagramReelIds(video)", script);
+        Assert.DoesNotContain("function normalizeStableInstagramAssetCandidate(candidate)", script);
+        Assert.DoesNotContain("function getInstagramStableAssetKey(video)", script);
+        Assert.DoesNotContain("ig-asset:", script);
+        Assert.Contains("if (getPlatform() === \"tiktok\" && window.location?.href)", script);
         Assert.Contains("function schedulePostScrollApply()", script);
         Assert.Contains("window.setTimeout(() => scheduleApply(true), 60)", script);
         Assert.Contains("window.setTimeout(() => scheduleApply(true), 160)", script);
@@ -51,6 +55,8 @@ public sealed class WebViewScriptControllerTests
         Assert.Contains("window.chrome?.webview?.postMessage", script);
         Assert.Contains("skipSeenReelsEnabled", script);
         Assert.Contains("Skipped seen video", script);
+        Assert.Contains("function isInstagramInteractionOverlayOpen()", script);
+        Assert.Contains("if (isInstagramInteractionOverlayOpen())", script);
         Assert.Contains("if (maybeSkipSeenReel(activeVideo))", script);
         Assert.Contains("lastDuplicateSkipDirection === skipDirection", script);
         Assert.Contains("if (skipDirection < 0)", script);

@@ -485,23 +485,6 @@ public sealed class WebViewScriptController : IWebViewScriptController
                     }
                 }
 
-                function getCurrentPageReelId() {
-                    const pageCandidates = [
-                        window.location?.href,
-                        document.querySelector("link[rel='canonical']")?.getAttribute("href"),
-                        document.querySelector("meta[property='og:url']")?.getAttribute("content")
-                    ];
-
-                    for (const candidate of pageCandidates) {
-                        const reelId = extractReelId(candidate);
-                        if (reelId) {
-                            return reelId;
-                        }
-                    }
-
-                    return null;
-                }
-
                 function getElementRectForScoring(element) {
                     if (!(element instanceof Element)) {
                         return null;
@@ -599,11 +582,6 @@ public sealed class WebViewScriptController : IWebViewScriptController
                     }
 
                     if (getPlatform() !== "tiktok") {
-                        const pageReelId = getCurrentPageReelId();
-                        if (pageReelId) {
-                            return pageReelId;
-                        }
-
                         candidates.unshift(...getVisibleInstagramReelIds(video));
                     } else {
                         const canonicalHref = document.querySelector("link[rel='canonical']")?.getAttribute("href");
@@ -617,7 +595,7 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         }
                     }
 
-                    if (window.location?.href) {
+                    if (getPlatform() === "tiktok" && window.location?.href) {
                         candidates.push(window.location.href);
                     }
 
@@ -1115,8 +1093,29 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         Array.from(document.querySelectorAll(selector)).some(candidate => isVisibleOverlay(candidate)));
                 }
 
+                function isInstagramInteractionOverlayOpen() {
+                    if (getPlatform() !== "instagram") {
+                        return false;
+                    }
+
+                    const selectors = [
+                        "[role='dialog'][aria-modal='true']",
+                        "[role='menu']",
+                        "[role='listbox']",
+                        "div[aria-label='Options']",
+                        "div[aria-label='More options']"
+                    ];
+
+                    return selectors.some(selector =>
+                        Array.from(document.querySelectorAll(selector)).some(candidate => isVisibleOverlay(candidate)));
+                }
+
                 function maybeSkipSeenReel(video) {
                     if (getPlatform() === "tiktok") {
+                        return false;
+                    }
+
+                    if (isInstagramInteractionOverlayOpen()) {
                         return false;
                     }
 
