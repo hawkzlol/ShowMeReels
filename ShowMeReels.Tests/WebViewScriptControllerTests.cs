@@ -14,6 +14,7 @@ public sealed class WebViewScriptControllerTests
 
         Assert.Contains("window.showMeReels", script);
         Assert.Contains("pauseAndMute", script);
+        Assert.Contains("getSeenDiagnostics", script);
         Assert.Contains("setSettings", script);
         Assert.Contains("resume", script);
         Assert.Contains("setHostActive", script);
@@ -45,8 +46,12 @@ public sealed class WebViewScriptControllerTests
         Assert.DoesNotContain("ig-asset:", script);
         Assert.Contains("if (getPlatform() === \"tiktok\" && window.location?.href)", script);
         Assert.Contains("function getInstagramStrongFingerprintKey(video)", script);
+        Assert.Contains("function getInstagramScopedFingerprintText(target, referenceRect)", script);
+        Assert.Contains("const scopedText = getInstagramScopedFingerprintText(target, referenceRect);", script);
+        Assert.Contains("function getInstagramFingerprintTokens(value)", script);
+        Assert.Contains("function hasCjkText(value)", script);
         Assert.Contains("return `ig-fp:${hashString(fingerprintSource)}`;", script);
-        Assert.Contains("fingerprintText.length < 40 || distinctiveWords.length < 5", script);
+        Assert.Contains("hasEnoughCjkText", script);
         Assert.Contains("function schedulePostScrollApply()", script);
         Assert.Contains("window.setTimeout(() => scheduleApply(true), 60)", script);
         Assert.Contains("window.setTimeout(() => scheduleApply(true), 160)", script);
@@ -63,12 +68,21 @@ public sealed class WebViewScriptControllerTests
         Assert.Contains("const interactionSuppressed = isSeenSkipSuppressedForVideo(video);", script);
         Assert.Contains("if (overlayOpen || interactionSuppressed)", script);
         Assert.Contains("SeenSkipInteractionSuppressionMs", script);
+        Assert.Contains("SeenReelDiagnosticsVersion", script);
         Assert.Contains("SeenReelDiagnosticThrottleMs", script);
+        Assert.Contains("SeenReelSameActiveDiagnosticThrottleMs", script);
+        Assert.Contains("SeenReelDiagnosticEventLimit", script);
         Assert.Contains("function postSeenReelDiagnostic(eventName, details = {}, throttleMs = SeenReelDiagnosticThrottleMs)", script);
+        Assert.Contains("function getSeenDiagnostics(reason = \"host-probe\")", script);
         Assert.Contains("type: \"seenReelDiagnostic\"", script);
+        Assert.Contains("version: SeenReelDiagnosticsVersion", script);
+        Assert.Contains("seenReelDiagnosticEvents.push", script);
+        Assert.Contains("recentEvents: seenReelDiagnosticEvents.slice(-6)", script);
         Assert.Contains("active-reel-id-not-found", script);
         Assert.Contains("same-active-reel", script);
         Assert.Contains("seen-reel-reappeared", script);
+        Assert.Contains("settings-applied", script);
+        Assert.Contains("observers-started", script);
         Assert.Contains("window.chrome?.webview?.postMessage(payload)", script);
         Assert.Contains("function suppressSeenSkipForCurrentInteraction()", script);
         Assert.Contains("document.addEventListener(\"pointerdown\", suppressSeenSkipForCurrentInteraction, true)", script);
@@ -159,6 +173,7 @@ public sealed class WebViewScriptControllerTests
         AppSettings settings = new();
 
         Assert.Contains("pauseAndMute", controller.BuildPauseAndMuteScript());
+        Assert.Contains("getSeenDiagnostics", controller.BuildSeenDiagnosticsScript("test"));
         Assert.Contains("resume(true", controller.BuildResumeScript(settings, shouldResume: true));
         Assert.Contains("scrollByDirection(1)", controller.BuildScrollScript(1));
         Assert.Contains("setHostActive(false)", controller.BuildSetHostActiveScript(isActive: false));

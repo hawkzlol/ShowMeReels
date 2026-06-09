@@ -8,6 +8,8 @@ public interface IWebViewScriptController
 
     string BuildBootstrapScript();
 
+    string BuildSeenDiagnosticsScript(string reason);
+
     string BuildPauseAndMuteScript();
 
     string BuildResumeScript(AppSettings settings, bool shouldResume);

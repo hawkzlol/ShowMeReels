@@ -32,6 +32,7 @@ public partial class MainWindow : Window
     private readonly IWebViewScriptController _webViewScriptController;
     private readonly ViewerToggleState _viewerToggleState = new(initiallyVisible: true);
     private readonly DispatcherTimer _settingsSaveTimer;
+    private readonly DispatcherTimer _seenReelDiagnosticsTimer;
     private readonly Forms.NotifyIcon _notifyIcon;
     private readonly Forms.ToolStripMenuItem _toggleMenuItem;
     private readonly Drawing.Icon _trayIcon;
@@ -42,10 +43,12 @@ public partial class MainWindow : Window
     private bool _isPinnedArrowCaptureEnabled;
     private bool _isPinnedOnTop;
     private bool _isRestoringFromBackground;
+    private bool _isSeenReelDiagnosticsProbeInProgress;
     private bool _isStartupRevealPending = true;
     private bool _isTaskbarMinimizeInProgress;
     private bool _isWebViewReady;
     private bool _isWebViewSuspended;
+    private string _lastSeenReelDiagnosticsSnapshot = "";
 
     public MainWindow(
         AppSettings settings,
@@ -72,6 +75,12 @@ public partial class MainWindow : Window
             Interval = TimeSpan.FromMilliseconds(300),
         };
         _settingsSaveTimer.Tick += SettingsSaveTimer_Tick;
+
+        _seenReelDiagnosticsTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(2),
+        };
+        _seenReelDiagnosticsTimer.Tick += SeenReelDiagnosticsTimer_Tick;
 
         _toggleMenuItem = new Forms.ToolStripMenuItem("Hide", null, ToggleMenuItem_Click);
         _trayIcon = LoadAppIcon();
@@ -122,6 +131,42 @@ public partial class MainWindow : Window
 
         ResumeWebViewIfNeeded();
         await coreWebView.ExecuteScriptAsync(_webViewScriptController.BuildApplySettingsScript(_settings));
+        await LogSeenReelDiagnosticsProbeAsync("settings");
+    }
+
+    private async Task LogSeenReelDiagnosticsProbeAsync(string reason)
+    {
+        if (_settings.Platform != ContentPlatform.Instagram || !_settings.SkipSeenReelsEnabled || _isSeenReelDiagnosticsProbeInProgress)
+        {
+            return;
+        }
+
+        CoreWebView2? coreWebView = GetCoreWebView();
+        if (coreWebView is null || _isWebViewSuspended || coreWebView.IsSuspended)
+        {
+            return;
+        }
+
+        try
+        {
+            _isSeenReelDiagnosticsProbeInProgress = true;
+            string result = await coreWebView.ExecuteScriptAsync(_webViewScriptController.BuildSeenDiagnosticsScript(reason));
+            if (string.Equals(result, _lastSeenReelDiagnosticsSnapshot, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _lastSeenReelDiagnosticsSnapshot = result;
+            AppDiagnostics.Log($"SeenReelProbe reason={reason} result={result}");
+        }
+        catch (Exception exception)
+        {
+            AppDiagnostics.Log($"SeenReelProbe failed reason={reason}: {exception.Message}");
+        }
+        finally
+        {
+            _isSeenReelDiagnosticsProbeInProgress = false;
+        }
     }
 
     private async Task ExecuteWebViewCommandAsync(string script)
@@ -542,7 +587,9 @@ public partial class MainWindow : Window
 
             ReelsWebView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
             ReelsWebView.CoreWebView2.Settings.AreDevToolsEnabled = false;
+            ReelsWebView.CoreWebView2.Settings.IsWebMessageEnabled = true;
             ReelsWebView.CoreWebView2.Settings.IsStatusBarEnabled = false;
+            AppDiagnostics.Log("WebView initialized; web messages enabled.");
 
             _isWebViewReady = true;
             _isWebViewSuspended = false;
@@ -568,6 +615,7 @@ public partial class MainWindow : Window
 
         _isClosing = true;
         _settingsSaveTimer.Stop();
+        _seenReelDiagnosticsTimer.Stop();
         CaptureCurrentBounds();
         _settingsStore.SaveAsync(_settings.Normalize()).GetAwaiter().GetResult();
 
@@ -603,7 +651,14 @@ public partial class MainWindow : Window
         await SetHostActiveAsync(isActive: true);
         SetWebViewMemoryUsageTarget(isLowPriority: false);
         SetBackgroundEfficiencyMode(enable: false);
+        _seenReelDiagnosticsTimer.Start();
+        await LogSeenReelDiagnosticsProbeAsync("loaded");
         FocusWebView();
+    }
+
+    private async void SeenReelDiagnosticsTimer_Tick(object? sender, EventArgs e)
+    {
+        await LogSeenReelDiagnosticsProbeAsync("timer");
     }
 
     private async void MainWindow_Deactivated(object? sender, EventArgs e)
@@ -976,6 +1031,8 @@ public partial class MainWindow : Window
         return "SeenReel "
             + $"event={message.Event ?? "unknown"} "
             + $"reason={message.Reason ?? "none"} "
+            + $"version={message.Version ?? "none"} "
+            + $"platform={message.Platform ?? "none"} "
             + $"reel={message.ReelId ?? "none"} "
             + $"last={message.LastActiveReelId ?? "none"} "
             + $"kind={message.IdentityKind ?? "none"} "
@@ -1589,6 +1646,8 @@ public partial class MainWindow : Window
         string[]? VideoIds,
         string? Event,
         string? Reason,
+        string? Version,
+        string? Platform,
         string? ReelId,
         string? LastActiveReelId,
         string? IdentityKind,

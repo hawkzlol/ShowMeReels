@@ -64,11 +64,14 @@ public sealed class WebViewScriptController : IWebViewScriptController
                 };
 
                 const SeenReelIdsStorageKey = "showMeReels.seenReelIds.v1";
+                const SeenReelDiagnosticsVersion = "2026-06-09.2";
                 const AdSkipCooldownMs = 1200;
                 const DuplicateSkipCooldownMs = 700;
                 const SeenSkipInteractionSuppressionMs = 8000;
                 const SeenReelDiagnosticThrottleMs = 750;
                 const SeenReelNoIdentityDiagnosticThrottleMs = 2500;
+                const SeenReelSameActiveDiagnosticThrottleMs = 10000;
+                const SeenReelDiagnosticEventLimit = 10;
                 const IgnoredTikTokSkipCooldownMs = 700;
                 const ActiveAudioEnforcementIntervalMs = 250;
                 const ActiveMaintenanceIntervalMs = 1200;
@@ -96,6 +99,7 @@ public sealed class WebViewScriptController : IWebViewScriptController
                 let seenSkipSuppressedUntil = 0;
                 let lastSeenReelDiagnosticSignature = "";
                 let lastSeenReelDiagnosticAt = 0;
+                const seenReelDiagnosticEvents = [];
                 let lastIgnoredTikTokVideoId = null;
                 let lastIgnoredTikTokSkipAt = 0;
                 let lastRequestedScrollDirection = 1;
@@ -699,9 +703,56 @@ public sealed class WebViewScriptController : IWebViewScriptController
                     return String(value || "")
                         .replace(/\s+/g, " ")
                         .replace(/more options|original audio|see translation|view all [0-9,.]* comments?|add a comment|liked by|like|comment|share|send|save|follow|following|reply|report|not interested/gi, " ")
+                        .replace(/\b[0-9][0-9,.]*[kmb]?\b/gi, " ")
                         .replace(/\s+/g, " ")
                         .trim()
                         .toLowerCase();
+                }
+
+                function getInstagramScopedFingerprintText(target, referenceRect) {
+                    if (!(target instanceof Element) || !referenceRect) {
+                        return "";
+                    }
+
+                    const textParts = [];
+                    const seen = new Set();
+                    const textElements = Array.from(target.querySelectorAll("a, span, h1, h2, div[dir='auto']"));
+                    for (const element of textElements) {
+                        if (isInsideInstagramInteractionOverlay(element) || !isElementInScope(element, referenceRect)) {
+                            continue;
+                        }
+
+                        const rect = element.getBoundingClientRect();
+                        if (rect.width <= 0 || rect.height <= 0 || rect.height > Math.max(220, referenceRect.height * 0.45)) {
+                            continue;
+                        }
+
+                        const text = normalizeInstagramFingerprintText(element.innerText || element.textContent || "");
+                        if (!text || text.length < 2 || seen.has(text)) {
+                            continue;
+                        }
+
+                        seen.add(text);
+                        textParts.push(text);
+                        if (textParts.length >= 24) {
+                            break;
+                        }
+                    }
+
+                    return textParts.join(" ");
+                }
+
+                function getInstagramFingerprintTokens(value) {
+                    const text = String(value || "");
+                    try {
+                        return Array.from(text.matchAll(/[\p{L}\p{N}_]{2,}/gu), match => match[0]);
+                    } catch {
+                        return text.match(/[a-z0-9_]{2,}/g) ?? [];
+                    }
+                }
+
+                function hasCjkText(value) {
+                    return /[\u3040-\u30ff\u3400-\u9fff]/u.test(String(value || ""));
                 }
 
                 function getInstagramCreatorKey(target, referenceRect) {
@@ -743,12 +794,17 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         return null;
                     }
 
-                    const referenceRect = target.getBoundingClientRect();
+                    const videoRect = video.getBoundingClientRect();
+                    const targetRect = target.getBoundingClientRect();
+                    const referenceRect = videoRect.width > 0 && videoRect.height > 0 ? videoRect : targetRect;
                     const creatorKey = getInstagramCreatorKey(target, referenceRect);
-                    const fingerprintText = normalizeInstagramFingerprintText(target.innerText || target.textContent || "");
-                    const words = fingerprintText.match(/[a-z0-9_]{4,}/g) ?? [];
-                    const distinctiveWords = Array.from(new Set(words));
-                    if (!creatorKey || fingerprintText.length < 40 || distinctiveWords.length < 5) {
+                    const scopedText = getInstagramScopedFingerprintText(target, referenceRect);
+                    const fingerprintText = scopedText || normalizeInstagramFingerprintText(target.innerText || target.textContent || "");
+                    const tokens = getInstagramFingerprintTokens(fingerprintText);
+                    const distinctiveTokens = Array.from(new Set(tokens));
+                    const hasEnoughText = fingerprintText.length >= 32 && distinctiveTokens.length >= 3;
+                    const hasEnoughCjkText = hasCjkText(fingerprintText) && fingerprintText.length >= 6;
+                    if (!creatorKey || (!hasEnoughText && !hasEnoughCjkText)) {
                         return null;
                     }
 
@@ -1272,11 +1328,13 @@ public sealed class WebViewScriptController : IWebViewScriptController
                     const rect = video ? video.getBoundingClientRect() : null;
                     const payload = {
                         type: "seenReelDiagnostic",
+                        version: SeenReelDiagnosticsVersion,
                         event: eventName,
                         reason,
                         reelId,
                         lastActiveReelId,
                         identityKind: getReelIdentityKind(reelId),
+                        platform: getPlatform(),
                         skipSeenEnabled: state.skipSeenReelsEnabled,
                         seenBefore,
                         activeReelChanged,
@@ -1291,6 +1349,21 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         path: window.location.pathname
                     };
 
+                    seenReelDiagnosticEvents.push({
+                        at: Math.round(window.performance?.now?.() ?? now),
+                        event: eventName,
+                        reason,
+                        reelId,
+                        identityKind: payload.identityKind,
+                        seenBefore,
+                        activeReelChanged,
+                        candidateCount: payload.candidateCount
+                    });
+
+                    while (seenReelDiagnosticEvents.length > SeenReelDiagnosticEventLimit) {
+                        seenReelDiagnosticEvents.shift();
+                    }
+
                     try {
                         window.chrome?.webview?.postMessage(payload);
                     } catch {
@@ -1300,6 +1373,32 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         console.debug("[ShowMeReels]", payload);
                     } catch {
                     }
+                }
+
+                function getSeenDiagnostics(reason = "host-probe") {
+                    const video = getActiveVideo();
+                    const reelId = getActiveReelId(video);
+                    const rect = video ? video.getBoundingClientRect() : null;
+                    return {
+                        version: SeenReelDiagnosticsVersion,
+                        reason,
+                        platform: getPlatform(),
+                        hasController: true,
+                        skipSeenEnabled: state.skipSeenReelsEnabled,
+                        reelId,
+                        lastActiveReelId,
+                        identityKind: getReelIdentityKind(reelId),
+                        seenBefore: reelId ? seenReelIds.has(reelId) : null,
+                        seenCount: seenReelIds.size,
+                        visibleVideoCount: getVisibleVideos().length,
+                        candidateCount: video ? getInstagramDiagnosticCandidateCount(video) : 0,
+                        recentEvents: seenReelDiagnosticEvents.slice(-6),
+                        overlayOpen: isInstagramInteractionOverlayOpen(),
+                        interactionSuppressed: isSeenSkipSuppressedForVideo(video),
+                        top: rect ? Math.round(rect.top * 100) / 100 : null,
+                        height: rect ? Math.round(rect.height * 100) / 100 : null,
+                        path: window.location.pathname
+                    };
                 }
 
                 function suppressSeenSkipForCurrentInteraction() {
@@ -1394,7 +1493,7 @@ public sealed class WebViewScriptController : IWebViewScriptController
                             reelId,
                             seenBefore,
                             activeReelChanged
-                        }, 1500);
+                        }, SeenReelSameActiveDiagnosticThrottleMs);
                         return false;
                     }
 
@@ -1787,6 +1886,10 @@ public sealed class WebViewScriptController : IWebViewScriptController
                     state.skipSeenReelsEnabled = state.platform !== "tiktok" && Boolean(settings.skipSeenReelsEnabled);
                     syncIgnoredTikTokVideoIds(settings.ignoredTikTokVideoIds);
                     startActiveAudioEnforcement();
+                    postSeenReelDiagnostic("settings", {
+                        reason: "settings-applied",
+                        video: getActiveVideo()
+                    }, 0);
                     return apply();
                 }
 
@@ -2184,6 +2287,10 @@ public sealed class WebViewScriptController : IWebViewScriptController
                     window.addEventListener("resize", () => scheduleApply());
                     startActiveAudioEnforcement();
                     startMaintenance();
+                    postSeenReelDiagnostic("startup", {
+                        reason: "observers-started",
+                        video: getActiveVideo()
+                    }, 0);
                     scheduleApply(true);
                 }
 
@@ -2192,6 +2299,7 @@ public sealed class WebViewScriptController : IWebViewScriptController
                     pauseAndMute,
                     resume,
                     scrollByDirection,
+                    getSeenDiagnostics,
                     setHostActive,
                     setSettings,
                     togglePlayPause
@@ -2205,6 +2313,14 @@ public sealed class WebViewScriptController : IWebViewScriptController
     public string BuildPauseAndMuteScript()
     {
         return "window.showMeReels ? window.showMeReels.pauseAndMute() : false;";
+    }
+
+    public string BuildSeenDiagnosticsScript(string reason)
+    {
+        string normalizedReason = JsonSerializer.Serialize(string.IsNullOrWhiteSpace(reason) ? "host-probe" : reason, SerializerOptions);
+        return "window.showMeReels && window.showMeReels.getSeenDiagnostics "
+            + $"? window.showMeReels.getSeenDiagnostics({normalizedReason}) "
+            + ": { hasController: false, path: window.location ? window.location.pathname : \"\", href: window.location ? window.location.href : \"\" };";
     }
 
     public string BuildResumeScript(AppSettings settings, bool shouldResume)
