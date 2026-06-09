@@ -66,6 +66,7 @@ public sealed class WebViewScriptController : IWebViewScriptController
                 const SeenReelIdsStorageKey = "showMeReels.seenReelIds.v1";
                 const AdSkipCooldownMs = 1200;
                 const DuplicateSkipCooldownMs = 700;
+                const SeenSkipInteractionSuppressionMs = 8000;
                 const IgnoredTikTokSkipCooldownMs = 700;
                 const ActiveAudioEnforcementIntervalMs = 250;
                 const ActiveMaintenanceIntervalMs = 1200;
@@ -89,6 +90,8 @@ public sealed class WebViewScriptController : IWebViewScriptController
                 let lastDuplicateSkipId = null;
                 let lastDuplicateSkipDirection = 1;
                 let lastDuplicateSkipAt = 0;
+                let seenSkipSuppressedVideo = null;
+                let seenSkipSuppressedUntil = 0;
                 let lastIgnoredTikTokVideoId = null;
                 let lastIgnoredTikTokSkipAt = 0;
                 let lastRequestedScrollDirection = 1;
@@ -424,6 +427,15 @@ public sealed class WebViewScriptController : IWebViewScriptController
                     }
                 }
 
+                function isInsideInstagramInteractionOverlay(element) {
+                    if (getPlatform() !== "instagram" || !(element instanceof Element)) {
+                        return false;
+                    }
+
+                    return Boolean(element.closest(
+                        "[role='dialog'][aria-modal='true'], [role='menu'], [role='listbox'], div[aria-label='Options'], div[aria-label='More options']"));
+                }
+
                 function collectTikTokCandidates(element, candidates) {
                     if (!(element instanceof Element)) {
                         return;
@@ -456,7 +468,7 @@ public sealed class WebViewScriptController : IWebViewScriptController
                 }
 
                 function collectInstagramCandidates(element, candidates) {
-                    if (!(element instanceof Element)) {
+                    if (!(element instanceof Element) || isInsideInstagramInteractionOverlay(element)) {
                         return;
                     }
 
@@ -475,6 +487,10 @@ public sealed class WebViewScriptController : IWebViewScriptController
 
                     const descendants = Array.from(element.querySelectorAll("[href], [src], [poster], [itemid], [data-id], [data-media-id], [data-reel-id], [data-video-id]"));
                     for (const descendant of descendants.slice(0, 48)) {
+                        if (isInsideInstagramInteractionOverlay(descendant)) {
+                            continue;
+                        }
+
                         collectAttributeCandidates(descendant, attributeNames, candidates);
                     }
 
@@ -515,6 +531,10 @@ public sealed class WebViewScriptController : IWebViewScriptController
                     const scored = [];
                     const seenIds = new Set();
                     for (const anchor of Array.from(document.querySelectorAll("a[href*='/reel/']"))) {
+                        if (isInsideInstagramInteractionOverlay(anchor)) {
+                            continue;
+                        }
+
                         const reelId = extractReelId(anchor.getAttribute("href") || anchor.href);
                         if (!reelId || seenIds.has(reelId)) {
                             continue;
@@ -606,6 +626,10 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         }
                     }
 
+                    if (getPlatform() !== "tiktok") {
+                        return getInstagramStrongFingerprintKey(video);
+                    }
+
                     return null;
                 }
 
@@ -665,6 +689,70 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         .join("|");
 
                     return fingerprintSource ? `fp:${hashString(fingerprintSource)}` : null;
+                }
+
+                function normalizeInstagramFingerprintText(value) {
+                    return String(value || "")
+                        .replace(/\s+/g, " ")
+                        .replace(/more options|original audio|see translation|view all [0-9,.]* comments?|add a comment|liked by|like|comment|share|send|save|follow|following|reply|report|not interested/gi, " ")
+                        .replace(/\s+/g, " ")
+                        .trim()
+                        .toLowerCase();
+                }
+
+                function getInstagramCreatorKey(target, referenceRect) {
+                    if (getPlatform() !== "instagram" || !(target instanceof Element)) {
+                        return "";
+                    }
+
+                    const anchors = Array.from(target.querySelectorAll("a[href]"));
+                    for (const anchor of anchors) {
+                        if (isInsideInstagramInteractionOverlay(anchor) || !isElementInScope(anchor, referenceRect)) {
+                            continue;
+                        }
+
+                        const href = anchor.getAttribute("href") || anchor.href;
+                        try {
+                            const normalizedUrl = new URL(href, window.location.origin);
+                            const pathParts = normalizedUrl.pathname.split("/").filter(Boolean);
+                            if (normalizedUrl.hostname.includes("instagram.com") || normalizedUrl.origin === window.location.origin) {
+                                const firstPart = (pathParts[0] || "").toLowerCase();
+                                if (firstPart
+                                    && !["reel", "reels", "p", "tv", "explore", "accounts", "direct", "stories"].includes(firstPart)) {
+                                    return firstPart;
+                                }
+                            }
+                        } catch {
+                        }
+                    }
+
+                    return "";
+                }
+
+                function getInstagramStrongFingerprintKey(video) {
+                    if (getPlatform() === "tiktok" || !video) {
+                        return null;
+                    }
+
+                    const target = getScrollTarget(video) ?? video;
+                    if (!(target instanceof Element) || isInsideInstagramInteractionOverlay(target)) {
+                        return null;
+                    }
+
+                    const referenceRect = target.getBoundingClientRect();
+                    const creatorKey = getInstagramCreatorKey(target, referenceRect);
+                    const fingerprintText = normalizeInstagramFingerprintText(target.innerText || target.textContent || "");
+                    const words = fingerprintText.match(/[a-z0-9_]{4,}/g) ?? [];
+                    const distinctiveWords = Array.from(new Set(words));
+                    if (!creatorKey || fingerprintText.length < 40 || distinctiveWords.length < 5) {
+                        return null;
+                    }
+
+                    const durationKey = Number.isFinite(video.duration) && video.duration > 0
+                        ? Math.round(video.duration * 10) / 10
+                        : "";
+                    const fingerprintSource = [creatorKey, fingerprintText.slice(0, 420), durationKey].join("|");
+                    return `ig-fp:${hashString(fingerprintSource)}`;
                 }
 
                 function getTikTokIgnoreKeys(video) {
@@ -1110,12 +1198,35 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         Array.from(document.querySelectorAll(selector)).some(candidate => isVisibleOverlay(candidate)));
                 }
 
+                function suppressSeenSkipForCurrentInteraction() {
+                    if (getPlatform() !== "instagram") {
+                        return;
+                    }
+
+                    seenSkipSuppressedVideo = getActiveVideo();
+                    seenSkipSuppressedUntil = Date.now() + SeenSkipInteractionSuppressionMs;
+                }
+
+                function isSeenSkipSuppressedForVideo(video) {
+                    if (!video || seenSkipSuppressedVideo !== video) {
+                        return false;
+                    }
+
+                    if (Date.now() > seenSkipSuppressedUntil) {
+                        seenSkipSuppressedVideo = null;
+                        seenSkipSuppressedUntil = 0;
+                        return false;
+                    }
+
+                    return true;
+                }
+
                 function maybeSkipSeenReel(video) {
                     if (getPlatform() === "tiktok") {
                         return false;
                     }
 
-                    if (isInstagramInteractionOverlayOpen()) {
+                    if (isInstagramInteractionOverlayOpen() || isSeenSkipSuppressedForVideo(video)) {
                         return false;
                     }
 
@@ -1125,12 +1236,13 @@ public sealed class WebViewScriptController : IWebViewScriptController
                     }
 
                     const seenBefore = seenReelIds.has(reelId);
-                    if (reelId !== lastActiveReelId) {
+                    const activeReelChanged = reelId !== lastActiveReelId;
+                    if (activeReelChanged) {
                         lastActiveReelId = reelId;
                         rememberSeenReelId(reelId);
                     }
 
-                    if (!state.skipSeenReelsEnabled || !seenBefore) {
+                    if (!state.skipSeenReelsEnabled || !seenBefore || !activeReelChanged) {
                         return false;
                     }
 
@@ -1149,7 +1261,7 @@ public sealed class WebViewScriptController : IWebViewScriptController
                     lastDuplicateSkipId = reelId;
                     lastDuplicateSkipDirection = skipDirection;
                     lastDuplicateSkipAt = now;
-                    showToast(`Skipped seen video ${reelId}`);
+                    showToast("Skipped seen video");
 
                     window.setTimeout(() => {
                         const activeVideo = getActiveVideo();
@@ -1874,6 +1986,8 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         capture: true
                     });
                     document.addEventListener("keydown", handleKeydown, true);
+                    document.addEventListener("pointerdown", suppressSeenSkipForCurrentInteraction, true);
+                    document.addEventListener("click", suppressSeenSkipForCurrentInteraction, true);
                     document.addEventListener("scroll", () => scheduleApply(), true);
                     window.addEventListener("resize", () => scheduleApply());
                     startActiveAudioEnforcement();
