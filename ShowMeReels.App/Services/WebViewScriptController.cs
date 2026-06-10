@@ -1269,7 +1269,6 @@ public sealed class WebViewScriptController : IWebViewScriptController
                             "[data-e2e='comment-panel']",
                             "[data-e2e='comment-modal']",
                             "[data-e2e='browse-comment-list']",
-                            "[data-e2e*='comment' i]",
                             "[role='dialog'][aria-modal='true']"
                         ]
                         : [
@@ -1296,8 +1295,35 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         "textarea, [contenteditable='true'], input[placeholder*='comment' i], textarea[placeholder*='comment' i], [aria-label*='comment' i], [data-e2e*='comment' i]"));
                 }
 
+                function isFeedItemElement(element) {
+                    if (!(element instanceof Element)) {
+                        return false;
+                    }
+
+                    return Boolean(element.closest("[data-e2e='recommend-list-item-container'], [data-e2e='recommend-list-item']"))
+                        || (element.matches("article, section") && Boolean(element.querySelector("video")));
+                }
+
+                function hasExplicitCommentOverlaySignal(element) {
+                    if (!(element instanceof Element)) {
+                        return false;
+                    }
+
+                    const dataE2e = element.getAttribute("data-e2e") || "";
+                    return dataE2e === "comment-panel"
+                        || dataE2e === "comment-modal"
+                        || dataE2e === "browse-comment-list"
+                        || element.getAttribute("aria-modal") === "true"
+                        || element.getAttribute("role") === "dialog"
+                        || /comment/i.test(element.getAttribute("aria-label") || "");
+                }
+
                 function isLikelyCommentOverlay(element) {
                     if (!(element instanceof HTMLElement) || !isVisibleOverlay(element) || !hasCommentOverlayContent(element)) {
+                        return false;
+                    }
+
+                    if (isFeedItemElement(element) && !hasExplicitCommentOverlaySignal(element)) {
                         return false;
                     }
 
@@ -1307,7 +1333,7 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         || style.position === "sticky"
                         || element.getAttribute("role") === "dialog"
                         || element.getAttribute("aria-modal") === "true"
-                        || element.hasAttribute("data-e2e")
+                        || hasExplicitCommentOverlaySignal(element)
                         || rect.width <= window.innerWidth * 0.72
                         || rect.height <= window.innerHeight * 0.82;
 
