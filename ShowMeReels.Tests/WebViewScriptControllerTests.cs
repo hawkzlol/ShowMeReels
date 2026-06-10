@@ -63,11 +63,15 @@ public sealed class WebViewScriptControllerTests
         Assert.Contains("function maybeSkipIgnoredTikTokVideo(video)", script);
         Assert.Contains("window.chrome?.webview?.postMessage", script);
         Assert.Contains("function getCommentOverlaySelectors()", script);
-        Assert.Contains("function shouldAllowNativeCommentWheelScroll(direction, event)", script);
+        Assert.Contains("function routeCommentWheelScroll(direction, event)", script);
         Assert.Contains("function tryScrollCommentOverlayWithKeyboard(direction, event)", script);
         Assert.Contains("type: \"scrollDiagnostic\"", script);
-        Assert.Contains("native-comment-scroll", script);
+        Assert.Contains("ScrollDiagnosticEventLimit", script);
+        Assert.Contains("wheel-comment-scroll", script);
         Assert.Contains("keyboard-comment-scroll", script);
+        Assert.Contains("comment-overlay-block-feed-scroll", script);
+        Assert.Contains("recentScrollEvents: scrollDiagnosticEvents.slice(-8)", script);
+        Assert.Contains("commentOverlay: getElementDiagnosticLabel(getOpenCommentOverlay())", script);
         Assert.Contains("skipSeenReelsEnabled", script);
         Assert.Contains("Skipped seen video", script);
         Assert.Contains("function isInstagramInteractionOverlayOpen()", script);

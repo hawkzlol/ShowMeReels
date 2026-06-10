@@ -136,7 +136,7 @@ public partial class MainWindow : Window
 
     private async Task LogSeenReelDiagnosticsProbeAsync(string reason)
     {
-        if (_settings.Platform != ContentPlatform.Instagram || !_settings.SkipSeenReelsEnabled || _isSeenReelDiagnosticsProbeInProgress)
+        if (_isSeenReelDiagnosticsProbeInProgress)
         {
             return;
         }

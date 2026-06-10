@@ -73,6 +73,7 @@ public sealed class WebViewScriptController : IWebViewScriptController
                 const SeenReelSameActiveDiagnosticThrottleMs = 10000;
                 const SeenReelDiagnosticEventLimit = 10;
                 const ScrollDiagnosticThrottleMs = 600;
+                const ScrollDiagnosticEventLimit = 12;
                 const IgnoredTikTokSkipCooldownMs = 700;
                 const ActiveAudioEnforcementIntervalMs = 250;
                 const ActiveMaintenanceIntervalMs = 1200;
@@ -103,6 +104,7 @@ public sealed class WebViewScriptController : IWebViewScriptController
                 const seenReelDiagnosticEvents = [];
                 let lastScrollDiagnosticSignature = "";
                 let lastScrollDiagnosticAt = 0;
+                const scrollDiagnosticEvents = [];
                 let lastIgnoredTikTokVideoId = null;
                 let lastIgnoredTikTokSkipAt = 0;
                 let lastRequestedScrollDirection = 1;
@@ -1267,14 +1269,49 @@ public sealed class WebViewScriptController : IWebViewScriptController
                             "[data-e2e='comment-panel']",
                             "[data-e2e='comment-modal']",
                             "[data-e2e='browse-comment-list']",
+                            "[data-e2e*='comment' i]",
                             "[role='dialog'][aria-modal='true']"
                         ]
                         : [
                             "[role='dialog'][aria-modal='true']",
                             "div[aria-label*='comment' i]",
                             "section[aria-label*='comment' i]",
-                            "aside[aria-label*='comment' i]"
+                            "aside[aria-label*='comment' i]",
+                            "div[role='dialog']",
+                            "section[role='dialog']"
                         ];
+                }
+
+                function hasCommentOverlayContent(element) {
+                    if (!(element instanceof Element)) {
+                        return false;
+                    }
+
+                    const normalizedText = getNormalizedTextSnapshot(element);
+                    if (/comments?|reply|replies|add a comment|view replies|most relevant/i.test(normalizedText)) {
+                        return true;
+                    }
+
+                    return Boolean(element.querySelector(
+                        "textarea, [contenteditable='true'], input[placeholder*='comment' i], textarea[placeholder*='comment' i], [aria-label*='comment' i], [data-e2e*='comment' i]"));
+                }
+
+                function isLikelyCommentOverlay(element) {
+                    if (!(element instanceof HTMLElement) || !isVisibleOverlay(element) || !hasCommentOverlayContent(element)) {
+                        return false;
+                    }
+
+                    const rect = element.getBoundingClientRect();
+                    const style = window.getComputedStyle(element);
+                    const isPanelLike = style.position === "fixed"
+                        || style.position === "sticky"
+                        || element.getAttribute("role") === "dialog"
+                        || element.getAttribute("aria-modal") === "true"
+                        || element.hasAttribute("data-e2e")
+                        || rect.width <= window.innerWidth * 0.72
+                        || rect.height <= window.innerHeight * 0.82;
+
+                    return isPanelLike;
                 }
 
                 function getCommentOverlayForTarget(target) {
@@ -1285,24 +1322,40 @@ public sealed class WebViewScriptController : IWebViewScriptController
 
                     for (const selector of getCommentOverlaySelectors()) {
                         const overlay = element.closest(selector);
-                        if (overlay instanceof HTMLElement && isVisibleOverlay(overlay)) {
+                        if (isLikelyCommentOverlay(overlay)) {
                             return overlay;
                         }
+                    }
+
+                    let current = element;
+                    while (current && current !== document.body && current !== document.documentElement) {
+                        if (isLikelyCommentOverlay(current)) {
+                            return current;
+                        }
+
+                        current = current.parentElement;
                     }
 
                     return null;
                 }
 
                 function getOpenCommentOverlay() {
+                    const selectorCandidates = [];
                     for (const selector of getCommentOverlaySelectors()) {
-                        const overlay = Array.from(document.querySelectorAll(selector))
-                            .find(candidate => candidate instanceof HTMLElement && isVisibleOverlay(candidate));
-                        if (overlay instanceof HTMLElement) {
-                            return overlay;
-                        }
+                        selectorCandidates.push(...Array.from(document.querySelectorAll(selector)));
                     }
 
-                    return null;
+                    const broadCandidates = Array.from(document.querySelectorAll(
+                        "[role='dialog'], [aria-modal='true'], [aria-label*='comment' i], [data-e2e*='comment' i], aside, section, main > div, body > div"));
+                    const candidates = Array.from(new Set([...selectorCandidates, ...broadCandidates]))
+                        .filter(candidate => isLikelyCommentOverlay(candidate))
+                        .sort((left, right) => {
+                            const leftRect = left.getBoundingClientRect();
+                            const rightRect = right.getBoundingClientRect();
+                            return (leftRect.width * leftRect.height) - (rightRect.width * rightRect.height);
+                        });
+
+                    return candidates[0] ?? null;
                 }
 
                 function canScrollElementInDirection(element, direction) {
@@ -1335,7 +1388,7 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         return overlay;
                     }
 
-                    return Array.from(overlay.querySelectorAll("div, section, main, ul, ol"))
+                    return Array.from(overlay.querySelectorAll("div, section, main, article, ul, ol"))
                         .find(candidate => canScrollElementInDirection(candidate, direction)) ?? null;
                 }
 
@@ -1376,6 +1429,22 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         path: window.location.pathname,
                         ...details
                     };
+
+                    scrollDiagnosticEvents.push({
+                        at: Math.round(window.performance?.now?.() ?? now),
+                        event: eventName,
+                        platform: payload.platform,
+                        input: payload.input ?? "",
+                        direction: payload.direction ?? null,
+                        moved: payload.moved ?? null,
+                        overlay: payload.overlay ?? "",
+                        nativeTarget: payload.nativeTarget ?? "",
+                        target: payload.target ?? ""
+                    });
+
+                    while (scrollDiagnosticEvents.length > ScrollDiagnosticEventLimit) {
+                        scrollDiagnosticEvents.shift();
+                    }
 
                     try {
                         window.chrome?.webview?.postMessage(payload);
@@ -1523,6 +1592,8 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         visibleVideoCount: getVisibleVideos().length,
                         candidateCount: video ? getInstagramDiagnosticCandidateCount(video) : 0,
                         recentEvents: seenReelDiagnosticEvents.slice(-6),
+                        recentScrollEvents: scrollDiagnosticEvents.slice(-8),
+                        commentOverlay: getElementDiagnosticLabel(getOpenCommentOverlay()),
                         overlayOpen: isInstagramInteractionOverlayOpen(),
                         interactionSuppressed: isSeenSkipSuppressedForVideo(video),
                         top: rect ? Math.round(rect.top * 100) / 100 : null,
@@ -2251,26 +2322,39 @@ public sealed class WebViewScriptController : IWebViewScriptController
                     return scrollInstagramByDirection(normalizedDirection);
                 }
 
-                function shouldAllowNativeCommentWheelScroll(direction, event) {
-                    const overlay = getCommentOverlayForTarget(event?.target);
+                function stopScrollEvent(event) {
+                    event?.preventDefault();
+                    event?.stopPropagation();
+                    event?.stopImmediatePropagation?.();
+                }
+
+                function routeCommentWheelScroll(direction, event) {
+                    const overlay = getCommentOverlayForTarget(event?.target) ?? getOpenCommentOverlay();
                     if (!overlay) {
                         return false;
                     }
 
                     const scrollElement = getScrollableCommentElement(overlay, direction, event?.target);
                     if (!scrollElement) {
-                        postScrollDiagnostic("comment-overlay-no-scroll-target", {
+                        stopScrollEvent(event);
+                        postScrollDiagnostic("comment-overlay-block-feed-scroll", {
                             input: "wheel",
                             direction,
                             overlay: getElementDiagnosticLabel(overlay),
                             target: getElementDiagnosticLabel(event?.target)
                         }, 1200);
-                        return false;
+                        return true;
                     }
 
-                    postScrollDiagnostic("native-comment-scroll", {
+                    const before = scrollElement.scrollTop;
+                    const delta = Number.isFinite(event?.deltaY) ? event.deltaY : direction * 160;
+                    scrollElement.scrollTop = before + delta;
+                    const moved = Math.abs(scrollElement.scrollTop - before) > 1;
+                    stopScrollEvent(event);
+                    postScrollDiagnostic("wheel-comment-scroll", {
                         input: "wheel",
                         direction,
+                        moved,
                         nativeTarget: getElementDiagnosticLabel(scrollElement),
                         overlay: getElementDiagnosticLabel(overlay),
                         target: getElementDiagnosticLabel(event?.target),
@@ -2289,6 +2373,7 @@ public sealed class WebViewScriptController : IWebViewScriptController
 
                     const scrollElement = getScrollableCommentElement(overlay, direction, event?.target);
                     if (!scrollElement) {
+                        event?.preventDefault();
                         postScrollDiagnostic("comment-overlay-no-scroll-target", {
                             input: "keyboard",
                             direction,
@@ -2304,9 +2389,7 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         : 90;
                     scrollElement.scrollTop = before + (direction * amount);
                     const moved = Math.abs(scrollElement.scrollTop - before) > 1;
-                    if (moved) {
-                        event?.preventDefault();
-                    }
+                    event?.preventDefault();
 
                     postScrollDiagnostic("keyboard-comment-scroll", {
                         input: "keyboard",
@@ -2359,7 +2442,7 @@ public sealed class WebViewScriptController : IWebViewScriptController
                     }
 
                     const direction = event.deltaY > 0 ? 1 : -1;
-                    if (shouldAllowNativeCommentWheelScroll(direction, event)) {
+                    if (routeCommentWheelScroll(direction, event)) {
                         return;
                     }
 
