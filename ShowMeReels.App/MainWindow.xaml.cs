@@ -984,6 +984,12 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (message is not null && string.Equals(message.Type, "scrollDiagnostic", StringComparison.Ordinal))
+        {
+            AppDiagnostics.Log($"ScrollDiagnostic {e.WebMessageAsJson}");
+            return;
+        }
+
         if (!string.Equals(message?.Type, "ignoreTikTokVideo", StringComparison.Ordinal))
         {
             return;

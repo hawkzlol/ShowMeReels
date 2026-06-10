@@ -20,6 +20,7 @@ public sealed class WebViewScriptControllerTests
         Assert.Contains("setHostActive", script);
         Assert.Contains("togglePlayPause", script);
         Assert.Contains("document.addEventListener(\"wheel\"", script);
+        Assert.Contains("handleDirectionalInput(direction, event, \"wheel\")", script);
         Assert.Contains("window.clearInterval(host.maintenanceTimerId)", script);
         Assert.Contains("host.observer.disconnect()", script);
         Assert.Contains("video.defaultMuted = false", script);
@@ -61,6 +62,12 @@ public sealed class WebViewScriptControllerTests
         Assert.Contains("function isTikTokInteractionOverlayOpen()", script);
         Assert.Contains("function maybeSkipIgnoredTikTokVideo(video)", script);
         Assert.Contains("window.chrome?.webview?.postMessage", script);
+        Assert.Contains("function getCommentOverlaySelectors()", script);
+        Assert.Contains("function shouldAllowNativeCommentWheelScroll(direction, event)", script);
+        Assert.Contains("function tryScrollCommentOverlayWithKeyboard(direction, event)", script);
+        Assert.Contains("type: \"scrollDiagnostic\"", script);
+        Assert.Contains("native-comment-scroll", script);
+        Assert.Contains("keyboard-comment-scroll", script);
         Assert.Contains("skipSeenReelsEnabled", script);
         Assert.Contains("Skipped seen video", script);
         Assert.Contains("function isInstagramInteractionOverlayOpen()", script);
@@ -102,6 +109,7 @@ public sealed class WebViewScriptControllerTests
         Assert.Contains("asset:${hashString(normalizedAssetCandidate)}", script);
         Assert.Contains("fp:${hashString(fingerprintSource)}", script);
         Assert.Contains("function getScrollableContainer(element)", script);
+        Assert.Contains("function canScrollElementInDirection(element, direction)", script);
         Assert.Contains("element.scrollHeight > element.clientHeight + 4", script);
         Assert.Contains("function getAudioTargetVideos()", script);
         Assert.Contains("function applyAudioSettingsToTargetVideos()", script);

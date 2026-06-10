@@ -72,6 +72,7 @@ public sealed class WebViewScriptController : IWebViewScriptController
                 const SeenReelNoIdentityDiagnosticThrottleMs = 2500;
                 const SeenReelSameActiveDiagnosticThrottleMs = 10000;
                 const SeenReelDiagnosticEventLimit = 10;
+                const ScrollDiagnosticThrottleMs = 600;
                 const IgnoredTikTokSkipCooldownMs = 700;
                 const ActiveAudioEnforcementIntervalMs = 250;
                 const ActiveMaintenanceIntervalMs = 1200;
@@ -100,6 +101,8 @@ public sealed class WebViewScriptController : IWebViewScriptController
                 let lastSeenReelDiagnosticSignature = "";
                 let lastSeenReelDiagnosticAt = 0;
                 const seenReelDiagnosticEvents = [];
+                let lastScrollDiagnosticSignature = "";
+                let lastScrollDiagnosticAt = 0;
                 let lastIgnoredTikTokVideoId = null;
                 let lastIgnoredTikTokSkipAt = 0;
                 let lastRequestedScrollDirection = 1;
@@ -1258,6 +1261,133 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         Array.from(document.querySelectorAll(selector)).some(candidate => isVisibleOverlay(candidate)));
                 }
 
+                function getCommentOverlaySelectors() {
+                    return getPlatform() === "tiktok"
+                        ? [
+                            "[data-e2e='comment-panel']",
+                            "[data-e2e='comment-modal']",
+                            "[data-e2e='browse-comment-list']",
+                            "[role='dialog'][aria-modal='true']"
+                        ]
+                        : [
+                            "[role='dialog'][aria-modal='true']",
+                            "div[aria-label*='comment' i]",
+                            "section[aria-label*='comment' i]",
+                            "aside[aria-label*='comment' i]"
+                        ];
+                }
+
+                function getCommentOverlayForTarget(target) {
+                    const element = target instanceof Element ? target : null;
+                    if (!element) {
+                        return null;
+                    }
+
+                    for (const selector of getCommentOverlaySelectors()) {
+                        const overlay = element.closest(selector);
+                        if (overlay instanceof HTMLElement && isVisibleOverlay(overlay)) {
+                            return overlay;
+                        }
+                    }
+
+                    return null;
+                }
+
+                function getOpenCommentOverlay() {
+                    for (const selector of getCommentOverlaySelectors()) {
+                        const overlay = Array.from(document.querySelectorAll(selector))
+                            .find(candidate => candidate instanceof HTMLElement && isVisibleOverlay(candidate));
+                        if (overlay instanceof HTMLElement) {
+                            return overlay;
+                        }
+                    }
+
+                    return null;
+                }
+
+                function canScrollElementInDirection(element, direction) {
+                    if (!(element instanceof HTMLElement) || !isScrollableElement(element)) {
+                        return false;
+                    }
+
+                    if (direction > 0) {
+                        return element.scrollTop + element.clientHeight < element.scrollHeight - 2;
+                    }
+
+                    return element.scrollTop > 2;
+                }
+
+                function getScrollableCommentElement(overlay, direction, startTarget = null) {
+                    if (!(overlay instanceof HTMLElement)) {
+                        return null;
+                    }
+
+                    let current = startTarget instanceof Element ? startTarget : overlay;
+                    while (current && current !== overlay.parentElement) {
+                        if (overlay.contains(current) && canScrollElementInDirection(current, direction)) {
+                            return current;
+                        }
+
+                        current = current.parentElement;
+                    }
+
+                    if (canScrollElementInDirection(overlay, direction)) {
+                        return overlay;
+                    }
+
+                    return Array.from(overlay.querySelectorAll("div, section, main, ul, ol"))
+                        .find(candidate => canScrollElementInDirection(candidate, direction)) ?? null;
+                }
+
+                function getElementDiagnosticLabel(element) {
+                    if (!(element instanceof Element)) {
+                        return "none";
+                    }
+
+                    const id = element.id ? `#${element.id}` : "";
+                    const role = element.getAttribute("role") ? `[role=${element.getAttribute("role")}]` : "";
+                    const dataE2e = element.getAttribute("data-e2e") ? `[data-e2e=${element.getAttribute("data-e2e")}]` : "";
+                    return `${element.tagName.toLowerCase()}${id}${role}${dataE2e}`;
+                }
+
+                function postScrollDiagnostic(eventName, details = {}, throttleMs = ScrollDiagnosticThrottleMs) {
+                    const now = Date.now();
+                    const signature = [
+                        eventName,
+                        details.reason ?? "",
+                        details.input ?? "",
+                        details.direction ?? "",
+                        details.moved ?? "",
+                        details.nativeTarget ?? "",
+                        getPlatform()
+                    ].join("|");
+
+                    if (signature === lastScrollDiagnosticSignature && (now - lastScrollDiagnosticAt) < throttleMs) {
+                        return;
+                    }
+
+                    lastScrollDiagnosticSignature = signature;
+                    lastScrollDiagnosticAt = now;
+
+                    const payload = {
+                        type: "scrollDiagnostic",
+                        event: eventName,
+                        platform: getPlatform(),
+                        path: window.location.pathname,
+                        ...details
+                    };
+
+                    try {
+                        window.chrome?.webview?.postMessage(payload);
+                    } catch {
+                    }
+
+                    try {
+                        console.debug("[ShowMeReels scroll]", payload);
+                    } catch {
+                    }
+                }
+
                 function getReelIdentityKind(reelId) {
                     if (!reelId) {
                         return "none";
@@ -2121,14 +2251,96 @@ public sealed class WebViewScriptController : IWebViewScriptController
                     return scrollInstagramByDirection(normalizedDirection);
                 }
 
-                function handleDirectionalInput(direction, event) {
+                function shouldAllowNativeCommentWheelScroll(direction, event) {
+                    const overlay = getCommentOverlayForTarget(event?.target);
+                    if (!overlay) {
+                        return false;
+                    }
+
+                    const scrollElement = getScrollableCommentElement(overlay, direction, event?.target);
+                    if (!scrollElement) {
+                        postScrollDiagnostic("comment-overlay-no-scroll-target", {
+                            input: "wheel",
+                            direction,
+                            overlay: getElementDiagnosticLabel(overlay),
+                            target: getElementDiagnosticLabel(event?.target)
+                        }, 1200);
+                        return false;
+                    }
+
+                    postScrollDiagnostic("native-comment-scroll", {
+                        input: "wheel",
+                        direction,
+                        nativeTarget: getElementDiagnosticLabel(scrollElement),
+                        overlay: getElementDiagnosticLabel(overlay),
+                        target: getElementDiagnosticLabel(event?.target),
+                        scrollTop: Math.round(scrollElement.scrollTop),
+                        scrollHeight: scrollElement.scrollHeight,
+                        clientHeight: scrollElement.clientHeight
+                    });
+                    return true;
+                }
+
+                function tryScrollCommentOverlayWithKeyboard(direction, event) {
+                    const overlay = getCommentOverlayForTarget(event?.target) ?? getOpenCommentOverlay();
+                    if (!overlay) {
+                        return false;
+                    }
+
+                    const scrollElement = getScrollableCommentElement(overlay, direction, event?.target);
+                    if (!scrollElement) {
+                        postScrollDiagnostic("comment-overlay-no-scroll-target", {
+                            input: "keyboard",
+                            direction,
+                            overlay: getElementDiagnosticLabel(overlay),
+                            target: getElementDiagnosticLabel(event?.target)
+                        }, 1200);
+                        return false;
+                    }
+
+                    const before = scrollElement.scrollTop;
+                    const amount = event?.key === "PageDown" || event?.key === "PageUp"
+                        ? Math.max(160, scrollElement.clientHeight * 0.85)
+                        : 90;
+                    scrollElement.scrollTop = before + (direction * amount);
+                    const moved = Math.abs(scrollElement.scrollTop - before) > 1;
+                    if (moved) {
+                        event?.preventDefault();
+                    }
+
+                    postScrollDiagnostic("keyboard-comment-scroll", {
+                        input: "keyboard",
+                        direction,
+                        moved,
+                        nativeTarget: getElementDiagnosticLabel(scrollElement),
+                        overlay: getElementDiagnosticLabel(overlay),
+                        target: getElementDiagnosticLabel(event?.target),
+                        scrollTop: Math.round(scrollElement.scrollTop),
+                        scrollHeight: scrollElement.scrollHeight,
+                        clientHeight: scrollElement.clientHeight
+                    });
+                    return moved;
+                }
+
+                function handleDirectionalInput(direction, event, inputKind = "unknown") {
                     if (scrollLocked) {
                         event?.preventDefault();
+                        postScrollDiagnostic("feed-scroll-locked", {
+                            input: inputKind,
+                            direction,
+                            target: getElementDiagnosticLabel(event?.target)
+                        });
                         return;
                     }
 
                     scrollLocked = true;
                     const moved = scrollByDirection(direction);
+                    postScrollDiagnostic("feed-scroll-attempt", {
+                        input: inputKind,
+                        direction,
+                        moved,
+                        target: getElementDiagnosticLabel(event?.target)
+                    });
                     if (moved) {
                         event?.preventDefault();
                     } else {
@@ -2146,7 +2358,12 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         return;
                     }
 
-                    handleDirectionalInput(event.deltaY > 0 ? 1 : -1, event);
+                    const direction = event.deltaY > 0 ? 1 : -1;
+                    if (shouldAllowNativeCommentWheelScroll(direction, event)) {
+                        return;
+                    }
+
+                    handleDirectionalInput(direction, event, "wheel");
                 }
 
                 function handleKeydown(event) {
@@ -2157,9 +2374,17 @@ public sealed class WebViewScriptController : IWebViewScriptController
                     const normalizedKey = String(event.key || "").toLowerCase();
 
                     if (event.key === "ArrowDown" || event.key === "PageDown" || normalizedKey === "s") {
-                        handleDirectionalInput(1, event);
+                        if ((event.key === "ArrowDown" || event.key === "PageDown") && tryScrollCommentOverlayWithKeyboard(1, event)) {
+                            return;
+                        }
+
+                        handleDirectionalInput(1, event, "keyboard");
                     } else if (event.key === "ArrowUp" || event.key === "PageUp" || normalizedKey === "w") {
-                        handleDirectionalInput(-1, event);
+                        if ((event.key === "ArrowUp" || event.key === "PageUp") && tryScrollCommentOverlayWithKeyboard(-1, event)) {
+                            return;
+                        }
+
+                        handleDirectionalInput(-1, event, "keyboard");
                     } else if (event.code === "Space" || normalizedKey === " ") {
                         event.preventDefault();
                         togglePlayPause();
