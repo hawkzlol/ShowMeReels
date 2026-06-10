@@ -2328,6 +2328,14 @@ public sealed class WebViewScriptController : IWebViewScriptController
                     event?.stopImmediatePropagation?.();
                 }
 
+                function containCommentOverlayScroll(overlay, scrollElement) {
+                    for (const element of [overlay, scrollElement]) {
+                        if (element instanceof HTMLElement) {
+                            element.style.overscrollBehaviorY = "contain";
+                        }
+                    }
+                }
+
                 function routeCommentWheelScroll(direction, event) {
                     const overlay = getCommentOverlayForTarget(event?.target) ?? getOpenCommentOverlay();
                     if (!overlay) {
@@ -2346,15 +2354,32 @@ public sealed class WebViewScriptController : IWebViewScriptController
                         return true;
                     }
 
-                    const before = scrollElement.scrollTop;
-                    const delta = Number.isFinite(event?.deltaY) ? event.deltaY : direction * 160;
-                    scrollElement.scrollTop = before + delta;
-                    const moved = Math.abs(scrollElement.scrollTop - before) > 1;
+                    containCommentOverlayScroll(overlay, scrollElement);
+                    const target = event?.target instanceof Element ? event.target : null;
+                    const canUseNativeScroll = !target || scrollElement === overlay || scrollElement.contains(target);
+                    if (canUseNativeScroll) {
+                        postScrollDiagnostic("native-comment-scroll", {
+                            input: "wheel",
+                            direction,
+                            nativeTarget: getElementDiagnosticLabel(scrollElement),
+                            overlay: getElementDiagnosticLabel(overlay),
+                            target: getElementDiagnosticLabel(event?.target),
+                            scrollTop: Math.round(scrollElement.scrollTop),
+                            scrollHeight: scrollElement.scrollHeight,
+                            clientHeight: scrollElement.clientHeight
+                        });
+                        return true;
+                    }
+
                     stopScrollEvent(event);
-                    postScrollDiagnostic("wheel-comment-scroll", {
+                    scrollElement.scrollBy({
+                        top: Number.isFinite(event?.deltaY) ? event.deltaY : direction * 160,
+                        left: 0,
+                        behavior: "auto"
+                    });
+                    postScrollDiagnostic("redirected-comment-scroll", {
                         input: "wheel",
                         direction,
-                        moved,
                         nativeTarget: getElementDiagnosticLabel(scrollElement),
                         overlay: getElementDiagnosticLabel(overlay),
                         target: getElementDiagnosticLabel(event?.target),

@@ -67,7 +67,10 @@ public sealed class WebViewScriptControllerTests
         Assert.Contains("function tryScrollCommentOverlayWithKeyboard(direction, event)", script);
         Assert.Contains("type: \"scrollDiagnostic\"", script);
         Assert.Contains("ScrollDiagnosticEventLimit", script);
-        Assert.Contains("wheel-comment-scroll", script);
+        Assert.Contains("function containCommentOverlayScroll(overlay, scrollElement)", script);
+        Assert.Contains("overscrollBehaviorY = \"contain\"", script);
+        Assert.Contains("native-comment-scroll", script);
+        Assert.Contains("redirected-comment-scroll", script);
         Assert.Contains("keyboard-comment-scroll", script);
         Assert.Contains("comment-overlay-block-feed-scroll", script);
         Assert.Contains("recentScrollEvents: scrollDiagnosticEvents.slice(-8)", script);
